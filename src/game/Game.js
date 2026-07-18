@@ -55,6 +55,7 @@ export class Game {
       this.player.lockPointer();
       const shot = this.weapon.tryFire();
       if (!shot) return;
+      this.sendLocalState(true);
       this.network.fire(shot);
       this.hud.flashAmmo();
     });
@@ -67,6 +68,7 @@ export class Game {
     });
 
     this.network.on("room", (room) => this.applyRoomState(room));
+    this.network.on("correction", (state) => this.player.setServerState(state));
     this.network.on("shot", (shot) => this.showShot(shot));
     this.network.on("reloadStart", ({ reloadMs }) => this.weapon.startReload(reloadMs));
     this.network.on("roundStart", (room) => {
@@ -106,7 +108,7 @@ export class Game {
       activeRemoteIds.add(player.id);
       let remote = this.remotePlayers.get(player.id);
       if (!remote) {
-        remote = new RemotePlayer(this.scene, player.slot, this.footstepAudio);
+        remote = new RemotePlayer(this.scene, player.slot);
         this.remotePlayers.set(player.id, remote);
       }
       remote.update(player);
@@ -147,7 +149,7 @@ export class Game {
     if (this.canAct()) {
       this.player.update(dt);
       this.weapon.update(dt);
-      this.network.sendPlayerUpdate(this.player.snapshot());
+      this.sendLocalState();
       this.localFootsteps.tick(dt, {
         audible: this.player.audible,
         dead: false,
@@ -163,5 +165,10 @@ export class Game {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  sendLocalState(force = false) {
+    const seq = this.network.sendPlayerUpdate(this.player.snapshot(), { force });
+    if (seq !== null) this.player.recordPrediction(seq);
   }
 }

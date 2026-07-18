@@ -3,7 +3,7 @@ export const GAME_CONFIG = {
   winsToMatch: 3,
   roundSeconds: 60,
   roundTransitionMs: 2200,
-  tickRateMs: 100,
+  tickRateMs: 50,
   player: {
     maxHealth: 100,
     radius: 0.36,

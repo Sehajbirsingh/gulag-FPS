@@ -14,11 +14,14 @@ export function attachGameServer(httpServer, {
   io.on("connection", (socket) => {
     socket.emit("server:config", GAME_CONFIG);
 
-    socket.on("room:create", withAck(socket, () => manager.createRoom(socket)));
+    socket.on("room:create", withAck(socket, ({ code }) => manager.createRoom(socket, code)));
     socket.on("room:quick-match", withAck(socket, () => manager.quickMatch(socket)));
     socket.on("room:join", withAck(socket, ({ code }) => manager.joinRoom(socket, code)));
     socket.on("player:ready", ({ ready }) => manager.setReady(socket, ready));
-    socket.on("player:update", (payload) => manager.updatePlayer(socket, payload));
+    socket.on("player:update", (payload) => {
+      const result = manager.updatePlayer(socket, payload);
+      if (result && !result.accepted) socket.emit("player:correction", result.state);
+    });
     socket.on("weapon:fire", (payload) => manager.fire(socket, payload));
     socket.on("weapon:reload", () => manager.reload(socket));
     socket.on("disconnect", () => manager.disconnect(socket));

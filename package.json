@@ -7,7 +7,7 @@
     "dev": "NODE_ENV=development node server/index.js",
     "build": "vite build",
     "start": "NODE_ENV=production node server/index.js",
-    "lint": "node --check server/index.js && node --check server/gameServer.js && node --check server/matchManager.js && node --check shared/config.js && node --check shared/hitboxes.js && node --check src/main.js && node --check src/game/Game.js && node --check src/player/PlayerController.js && node --check src/audio/FootstepAudio.js",
+    "lint": "node --check server/index.js && node --check server/gameServer.js && node --check server/matchManager.js && node --check shared/config.js && node --check shared/hitboxes.js && node --check src/main.js && node --check src/game/Game.js && node --check src/net/ClientPrediction.js && node --check src/net/NetworkClient.js && node --check src/player/PlayerController.js && node --check src/player/RemotePlayer.js && node --check src/audio/FootstepAudio.js && node --check src/ui/Hud.js",
     "test": "node --test",
     "qa": "npm run lint && npm test && npm run build"
   },

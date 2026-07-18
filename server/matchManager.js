@@ -16,8 +16,9 @@ export class MatchManager {
     this.waitingRoomCode = null;
   }
 
-  createRoom(socket) {
-    const code = this.generateRoomCode();
+  createRoom(socket, requestedCode = null) {
+    const code = requestedCode ? normalizeRoomCode(requestedCode) : this.generateRoomCode();
+    if (this.rooms.has(code)) throw new Error("Room code already exists. Try again.");
     const room = {
       code,
       status: "waiting",
@@ -72,6 +73,11 @@ export class MatchManager {
     const player = room.players.get(socket.id);
     if (!player || player.dead) return;
 
+    const seq = Number.isFinite(payload?.seq) ? Math.floor(payload.seq) : null;
+    if (seq !== null && seq <= player.seq) {
+      return { accepted: false, stale: true, state: movementState(player) };
+    }
+
     const now = Date.now();
     const position = clampToArena(sanitizeVector(payload?.position, player.position));
     const last = player.lastPositionAt || now;
@@ -91,9 +97,8 @@ export class MatchManager {
     player.pitch = sanitizeNumber(payload?.pitch, player.pitch, -1.35, 1.35);
     player.crouch = Boolean(payload?.crouch);
     player.slowWalk = Boolean(payload?.slowWalk) && !player.crouch;
-    player.speed = acceptedMove ? attemptedStep / delta : 0;
-    player.audible = !player.slowWalk && !player.crouch && player.speed > 0.35;
-    player.seq = Number.isFinite(payload?.seq) ? payload.seq : player.seq;
+    player.seq = seq ?? player.seq;
+    return { accepted: acceptedMove, stale: false, state: movementState(player) };
   }
 
   fire(socket, payload) {
@@ -182,7 +187,7 @@ export class MatchManager {
         if (this.waitingRoomCode === room.code) this.waitingRoomCode = null;
         continue;
       }
-      this.broadcastRoom(room);
+      this.broadcastRoom(room, { volatile: true });
     }
   }
 
@@ -292,8 +297,6 @@ export class MatchManager {
       pitch: 0,
       crouch: false,
       slowWalk: false,
-      audible: false,
-      speed: 0,
       dead: false,
       seq: 0
     };
@@ -315,8 +318,6 @@ export class MatchManager {
     player.pitch = 0;
     player.crouch = false;
     player.slowWalk = false;
-    player.audible = false;
-    player.speed = 0;
     player.dead = false;
     player.lastPositionAt = Date.now();
   }
@@ -344,16 +345,16 @@ export class MatchManager {
         pitch: player.pitch,
         crouch: player.crouch,
         slowWalk: player.slowWalk,
-        audible: player.audible,
-        speed: player.speed,
         dead: player.dead,
         seq: player.seq
       }))
     };
   }
 
-  broadcastRoom(room) {
-    this.io.to(room.code).emit("room:state", this.publicRoom(room));
+  broadcastRoom(room, { volatile = false } = {}) {
+    const roomChannel = this.io.to(room.code);
+    const transport = volatile && roomChannel.volatile ? roomChannel.volatile : roomChannel;
+    transport.emit("room:state", this.publicRoom(room));
   }
 
   getRoomForSocket(socket) {
@@ -368,6 +369,26 @@ export class MatchManager {
     } while (this.rooms.has(code));
     return code;
   }
+}
+
+function movementState(player) {
+  return {
+    id: player.id,
+    slot: player.slot,
+    position: { ...player.position },
+    yaw: player.yaw,
+    pitch: player.pitch,
+    crouch: player.crouch,
+    slowWalk: player.slowWalk,
+    dead: player.dead,
+    seq: player.seq
+  };
+}
+
+function normalizeRoomCode(value) {
+  const code = String(value).trim().toUpperCase();
+  if (!/^[A-HJ-NP-Z2-9]{5}$/.test(code)) throw new Error("Invalid room code.");
+  return code;
 }
 
 function sanitizeVector(value, fallback) {

@@ -1,5 +1,7 @@
 import { io } from "socket.io-client";
 
+const ROOM_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
 export class NetworkClient {
   constructor() {
     this.socket = io();
@@ -9,6 +11,7 @@ export class NetworkClient {
 
     this.socket.on("connect", () => this.emit("connected", this.socket.id));
     this.socket.on("room:state", (room) => this.emit("room", room));
+    this.socket.on("player:correction", (state) => this.emit("correction", state));
     this.socket.on("weapon:shot", (shot) => this.emit("shot", shot));
     this.socket.on("weapon:reload-start", (payload) => this.emit("reloadStart", payload));
     this.socket.on("round:start", (room) => this.emit("roundStart", room));
@@ -30,8 +33,14 @@ export class NetworkClient {
     for (const handler of this.handlers.get(event) ?? []) handler(payload);
   }
 
-  async createRoom() {
-    return this.request("room:create");
+  createRoom() {
+    const code = Array.from(
+      { length: 5 },
+      () => ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)]
+    ).join("");
+    const pendingRoom = this.request("room:create", { code });
+    pendingRoom.roomCode = code;
+    return pendingRoom;
   }
 
   async quickMatch() {
@@ -46,11 +55,14 @@ export class NetworkClient {
     this.socket.emit("player:ready", { ready });
   }
 
-  sendPlayerUpdate(snapshot) {
+  sendPlayerUpdate(snapshot, { force = false } = {}) {
     const now = performance.now();
-    if (now - this.lastSent < 33) return;
+    if (!force && now - this.lastSent < 33) return null;
     this.lastSent = now;
-    this.socket.emit("player:update", { ...snapshot, seq: ++this.seq });
+    const seq = ++this.seq;
+    const transport = force ? this.socket : this.socket.volatile;
+    transport.emit("player:update", { ...snapshot, seq });
+    return seq;
   }
 
   fire(shot) {

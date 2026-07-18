@@ -20,7 +20,18 @@ export class Hud {
   }
 
   onCreateRoom(handler) {
-    this.root.querySelector("[data-create]").addEventListener("click", () => handler().catch((error) => this.setStatus(error.message)));
+    this.root.querySelector("[data-create]").addEventListener("click", async () => {
+      try {
+        const pendingRoom = handler();
+        const requestedCode = pendingRoom?.roomCode;
+        const copyPending = requestedCode ? this.copyRoomCode(requestedCode) : null;
+        const room = await pendingRoom;
+        if (room?.code !== requestedCode) await this.copyRoomCode(room.code);
+        else await copyPending;
+      } catch (error) {
+        this.setStatus(error.message);
+      }
+    });
   }
 
   onQuickMatch(handler) {
@@ -103,6 +114,24 @@ export class Hud {
 
   setStatus(message) {
     this.status.textContent = message;
+  }
+
+  async copyRoomCode(code) {
+    this.joinInput.value = code;
+    let copied = false;
+    try {
+      await navigator.clipboard?.writeText(code);
+      copied = Boolean(navigator.clipboard);
+    } catch {
+      // Clipboard permission varies by browser; the selected field is the fallback.
+    }
+    if (!copied) {
+      this.joinInput.focus();
+      this.joinInput.select();
+      this.joinInput.setSelectionRange(0, code.length);
+      copied = document.execCommand?.("copy") === true;
+    }
+    this.setStatus(copied ? `Room ${code} copied` : `Room ${code} ready to copy`);
   }
 }
 

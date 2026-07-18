@@ -1,11 +1,11 @@
 import * as THREE from "three";
 
 export class RemotePlayer {
-  constructor(scene, slot, footstepAudio) {
+  constructor(scene, slot) {
     this.group = new THREE.Group();
     this.targetPosition = new THREE.Vector3();
     this.targetYaw = 0;
-    this.footsteps = footstepAudio?.createEmitter(this.group);
+    this.hasReceivedState = false;
 
     const uniform = slot === 0 ? 0x7794a6 : 0xad6d53;
     const limbMaterial = new THREE.MeshStandardMaterial({ color: uniform, roughness: 0.8, metalness: 0.05 });
@@ -27,6 +27,11 @@ export class RemotePlayer {
     this.player = player;
     this.targetPosition.set(player.position.x, player.position.y, player.position.z);
     this.targetYaw = player.yaw;
+    if (!this.hasReceivedState) {
+      this.group.position.copy(this.targetPosition);
+      this.group.rotation.y = this.targetYaw;
+      this.hasReceivedState = true;
+    }
     this.group.visible = !player.dead;
     const crouchDrop = player.crouch ? 0.42 : 0;
     for (const part of [this.head, this.torso, this.leftArm, this.rightArm, this.leftLeg, this.rightLeg]) {
@@ -35,9 +40,13 @@ export class RemotePlayer {
   }
 
   tick(dt) {
-    this.group.position.lerp(this.targetPosition, 1 - Math.pow(0.02, dt));
-    this.group.rotation.y = lerpAngle(this.group.rotation.y, this.targetYaw, 1 - Math.pow(0.02, dt));
-    this.footsteps?.tick(dt, this.player);
+    const distance = this.group.position.distanceTo(this.targetPosition);
+    if (distance > 3) {
+      this.group.position.copy(this.targetPosition);
+    } else {
+      this.group.position.lerp(this.targetPosition, 1 - Math.exp(-18 * dt));
+    }
+    this.group.rotation.y = lerpAngle(this.group.rotation.y, this.targetYaw, 1 - Math.exp(-20 * dt));
   }
 
   dispose(scene) {

@@ -1,21 +1,7 @@
 import * as THREE from "three";
 
-export const FOOTSTEP_HEARING_RADIUS = 16;
-const FOOTSTEP_NEAR_DISTANCE = 2.5;
 const LOCAL_FOOTSTEP_MIN_VOLUME = 0.052;
 const LOCAL_FOOTSTEP_MAX_VOLUME = 0.072;
-
-export function getOpponentFootstepVolume(distance) {
-  if (!Number.isFinite(distance) || distance >= FOOTSTEP_HEARING_RADIUS) return 0;
-
-  const normalizedDistance = THREE.MathUtils.clamp(
-    (distance - FOOTSTEP_NEAR_DISTANCE) / (FOOTSTEP_HEARING_RADIUS - FOOTSTEP_NEAR_DISTANCE),
-    0,
-    1
-  );
-  const proximity = 1 - normalizedDistance;
-  return 0.035 + 0.22 * Math.pow(proximity, 1.35);
-}
 
 export class FootstepAudio {
   constructor(camera) {
@@ -31,8 +17,6 @@ export class FootstepAudio {
     this.hasInteracted = false;
     this.shotCount = 0;
     this.localStepCount = 0;
-    this.remoteStepCount = 0;
-    this.lastRemoteStepDistance = null;
     this.unlock = this.unlock.bind(this);
     window.addEventListener("pointerdown", this.unlock, { passive: true, capture: true });
     window.addEventListener("keydown", this.unlock, { capture: true });
@@ -63,16 +47,8 @@ export class FootstepAudio {
     queueMicrotask(() => this.syncDebugState());
   }
 
-  createEmitter(group) {
-    return new FootstepEmitter(this.listener, this.footstepBuffer, group, true, (distance, played) => {
-      if (played) this.remoteStepCount += 1;
-      this.lastRemoteStepDistance = distance;
-      this.syncDebugState();
-    });
-  }
-
   createLocalEmitter(group) {
-    return new FootstepEmitter(this.listener, this.footstepBuffer, group, false, () => {
+    return new FootstepEmitter(this.listener, this.footstepBuffer, group, () => {
       this.localStepCount += 1;
       this.syncDebugState();
     });
@@ -124,10 +100,7 @@ export class FootstepAudio {
       lobbyPlaying: !this.lobbyMusic.paused,
       matchActive: this.matchActive,
       shotCount: this.shotCount,
-      localStepCount: this.localStepCount,
-      remoteStepCount: this.remoteStepCount,
-      lastRemoteStepDistance: this.lastRemoteStepDistance,
-      footstepHearingRadius: FOOTSTEP_HEARING_RADIUS
+      localStepCount: this.localStepCount
     };
   }
 
@@ -138,32 +111,15 @@ export class FootstepAudio {
     document.documentElement.dataset.matchAudio = state.matchActive ? "match" : "lobby";
     document.documentElement.dataset.shotAudioCount = String(state.shotCount);
     document.documentElement.dataset.localFootstepCount = String(state.localStepCount);
-    document.documentElement.dataset.remoteFootstepCount = String(state.remoteStepCount);
-    document.documentElement.dataset.remoteFootstepDistance = state.lastRemoteStepDistance === null
-      ? "none"
-      : state.lastRemoteStepDistance.toFixed(2);
   }
 }
 
 class FootstepEmitter {
-  constructor(listener, buffer, group, positional, onStep) {
-    this.listener = listener;
-    this.positional = positional;
+  constructor(listener, buffer, group, onStep) {
     this.onStep = onStep;
-    this.listenerPosition = new THREE.Vector3();
-    this.sourcePosition = new THREE.Vector3();
-    this.audio = positional ? new THREE.PositionalAudio(listener) : new THREE.Audio(listener);
+    this.audio = new THREE.Audio(listener);
     this.audio.setBuffer(buffer);
-    if (positional) {
-      this.audio.panner.panningModel = "HRTF";
-      this.audio.setDistanceModel("linear");
-      this.audio.setRefDistance(FOOTSTEP_NEAR_DISTANCE);
-      this.audio.setMaxDistance(FOOTSTEP_HEARING_RADIUS);
-      this.audio.setRolloffFactor(0.82);
-      this.audio.setVolume(getOpponentFootstepVolume(FOOTSTEP_NEAR_DISTANCE));
-    } else {
-      this.audio.setVolume(LOCAL_FOOTSTEP_MIN_VOLUME);
-    }
+    this.audio.setVolume(LOCAL_FOOTSTEP_MIN_VOLUME);
     this.audio.position.set(0, 0.08, 0);
     this.stepTimer = 0;
     group.add(this.audio);
@@ -184,29 +140,18 @@ class FootstepEmitter {
     const stride = THREE.MathUtils.clamp(0.64 - speed * 0.038, 0.39, 0.59);
     this.stepTimer = stride + Math.random() * 0.035;
 
-    let distance = 0;
-    let volume = THREE.MathUtils.lerp(
+    const volume = THREE.MathUtils.lerp(
       LOCAL_FOOTSTEP_MIN_VOLUME,
       LOCAL_FOOTSTEP_MAX_VOLUME,
       THREE.MathUtils.clamp((speed - 1.5) / 4.5, 0, 1)
     );
-    if (this.positional) {
-      this.listener.getWorldPosition(this.listenerPosition);
-      this.audio.getWorldPosition(this.sourcePosition);
-      distance = this.listenerPosition.distanceTo(this.sourcePosition);
-      volume = getOpponentFootstepVolume(distance);
-      if (volume === 0) {
-        this.onStep?.(distance, false);
-        return;
-      }
-    }
 
     if (this.audio.context.state !== "running" || this.audio.isPlaying) return;
 
     this.audio.setVolume(volume);
     this.audio.setPlaybackRate(0.96 + Math.random() * 0.1);
     this.audio.play();
-    this.onStep?.(distance, true);
+    this.onStep?.();
   }
 }
 

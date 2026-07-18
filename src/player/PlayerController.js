@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GAME_CONFIG, expandedObstacleBounds } from "../../shared/config.js";
+import { ClientPrediction } from "../net/ClientPrediction.js";
 
 const FORWARD = new THREE.Vector3();
 const RIGHT = new THREE.Vector3();
@@ -22,6 +23,7 @@ export class PlayerController {
     this.hasSpawned = false;
     this.currentSpeed = 0;
     this.eyeHeight = GAME_CONFIG.player.eyeHeight;
+    this.prediction = new ClientPrediction();
 
     this.camera.rotation.order = "YXZ";
     this.bindInput();
@@ -58,7 +60,20 @@ export class PlayerController {
       this.yaw = state.yaw;
       this.pitch = state.pitch ?? 0;
       this.hasSpawned = true;
+      this.prediction.reset(state.seq);
+      this.syncCamera();
+      return;
     }
+
+    const result = this.prediction.reconcile(state.seq, state.position, this.position);
+    if (!result) return;
+    this.position.set(result.position.x, result.position.y, result.position.z);
+    if (result.error > 0.15) this.velocity.set(0, Math.min(0, this.velocity.y), 0);
+    this.syncCamera();
+  }
+
+  recordPrediction(seq) {
+    this.prediction.record(seq, this.position);
   }
 
   update(dt) {
@@ -103,9 +118,7 @@ export class PlayerController {
     this.audible = isMoving && this.onGround && !this.slowWalk && !this.crouch;
     const targetEye = this.crouch ? GAME_CONFIG.player.crouchEyeHeight : GAME_CONFIG.player.eyeHeight;
     this.eyeHeight = THREE.MathUtils.damp(this.eyeHeight, targetEye, 18, dt);
-    this.camera.position.set(this.position.x, this.position.y + this.eyeHeight, this.position.z);
-    this.camera.rotation.y = this.yaw;
-    this.camera.rotation.x = this.pitch;
+    this.syncCamera();
   }
 
   moveAxis(axis, amount) {
@@ -162,8 +175,13 @@ export class PlayerController {
       yaw: this.yaw,
       pitch: this.pitch,
       crouch: this.crouch,
-      slowWalk: this.slowWalk,
-      audible: this.audible
+      slowWalk: this.slowWalk
     };
+  }
+
+  syncCamera() {
+    this.camera.position.set(this.position.x, this.position.y + this.eyeHeight, this.position.z);
+    this.camera.rotation.y = this.yaw;
+    this.camera.rotation.x = this.pitch;
   }
 }

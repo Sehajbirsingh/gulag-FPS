@@ -58,6 +58,15 @@ function aimAt(shooter, point) {
   shooter.pitch = Math.asin(direction.y);
 }
 
+test("a validated client room code is preserved by the server", () => {
+  const manager = new MatchManager(makeIo());
+  const room = manager.createRoom(makeSocket("creator"), "AB2CD");
+
+  assert.equal(room.code, "AB2CD");
+  assert.throws(() => manager.createRoom(makeSocket("duplicate"), "AB2CD"), /already exists/);
+  assert.throws(() => manager.createRoom(makeSocket("invalid"), "OOOOO"), /Invalid room code/);
+});
+
 test("timer expiry restarts the same round without awarding a win", async () => {
   const io = makeIo();
   const manager = new MatchManager(io, { roundTransitionMs: 5 });
@@ -87,7 +96,7 @@ test("timer expiry restarts the same round without awarding a win", async () => 
   assert.equal(room.players.get("second").hp, 100);
 });
 
-test("server rejects a player update inside solid cover", () => {
+test("server rejects cover movement, echoes its sequence, and accepts recovery", () => {
   const io = makeIo();
   const manager = new MatchManager(io);
   const first = makeSocket("first");
@@ -100,61 +109,28 @@ test("server rejects a player update inside solid cover", () => {
   const room = manager.rooms.get(created.code);
   const player = room.players.get("first");
   const before = { ...player.position };
-  manager.updatePlayer(first, {
+  const rejected = manager.updatePlayer(first, {
     position: { x: -12.75, y: 0, z: 0 },
     yaw: 0,
-    pitch: 0
+    pitch: 0,
+    seq: 1
   });
 
+  assert.equal(rejected.accepted, false);
+  assert.equal(rejected.state.seq, 1);
+  assert.deepEqual(rejected.state.position, before);
   assert.deepEqual(player.position, before);
-});
-
-test("server broadcasts running footsteps but keeps slow walk and crouch silent", () => {
-  const io = makeIo();
-  const manager = new MatchManager(io);
-  const first = makeSocket("first");
-  const second = makeSocket("second");
-  const created = manager.createRoom(first);
-  manager.joinRoom(second, created.code);
-  manager.setReady(first, true);
-  manager.setReady(second, true);
-
-  const room = manager.rooms.get(created.code);
-  const player = room.players.get("first");
   player.lastPositionAt = Date.now() - 100;
-  manager.updatePlayer(first, {
-    position: { x: player.position.x, y: 0, z: 0.4 },
+  const recovered = manager.updatePlayer(first, {
+    position: { x: before.x, y: 0, z: before.z + 0.25 },
     yaw: player.yaw,
     pitch: 0,
-    slowWalk: false,
-    crouch: false
+    seq: 2
   });
 
-  let opponentView = manager.publicRoom(room, second.id).players.find((item) => item.id === first.id);
-  assert.equal(opponentView.audible, true);
-  assert.ok(opponentView.speed > 0.35);
-
-  player.lastPositionAt = Date.now() - 100;
-  manager.updatePlayer(first, {
-    position: { x: player.position.x, y: 0, z: 0.8 },
-    yaw: player.yaw,
-    pitch: 0,
-    slowWalk: true,
-    crouch: false
-  });
-  opponentView = manager.publicRoom(room, second.id).players.find((item) => item.id === first.id);
-  assert.equal(opponentView.audible, false);
-
-  player.lastPositionAt = Date.now() - 100;
-  manager.updatePlayer(first, {
-    position: { x: player.position.x, y: 0, z: 1.2 },
-    yaw: player.yaw,
-    pitch: 0,
-    slowWalk: false,
-    crouch: true
-  });
-  opponentView = manager.publicRoom(room, second.id).players.find((item) => item.id === first.id);
-  assert.equal(opponentView.audible, false);
+  assert.equal(recovered.accepted, true);
+  assert.equal(player.position.z, before.z + 0.25);
+  assert.equal(manager.publicRoom(room, second.id).players.find((item) => item.id === first.id).seq, 2);
 });
 
 test("ready messages cannot restart an active round", () => {
