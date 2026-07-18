@@ -6,6 +6,7 @@ import { RemotePlayer } from "../player/RemotePlayer.js";
 import { Pistol } from "../weapons/Pistol.js";
 import { NetworkClient } from "../net/NetworkClient.js";
 import { Hud } from "../ui/Hud.js";
+import { FootstepAudio } from "../audio/FootstepAudio.js";
 
 export class Game {
   constructor(root) {
@@ -19,9 +20,9 @@ export class Game {
   start() {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x171615);
-    this.scene.fog = new THREE.Fog(0x171615, 15, 42);
+    this.scene.fog = new THREE.Fog(0x171615, 22, 66);
 
-    this.camera = new THREE.PerspectiveCamera(76, window.innerWidth / window.innerHeight, 0.05, 120);
+    this.camera = new THREE.PerspectiveCamera(76, window.innerWidth / window.innerHeight, 0.05, 150);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -31,6 +32,8 @@ export class Game {
 
     this.arena = createArena(this.scene);
     this.player = new PlayerController(this.camera, this.renderer.domElement, this.arena.colliders);
+    this.footstepAudio = new FootstepAudio(this.camera);
+    this.localFootsteps = this.footstepAudio.createLocalEmitter(this.camera);
     this.weapon = new Pistol(this.camera, this.scene);
     this.hud = new Hud(this.root);
     this.network = new NetworkClient();
@@ -87,6 +90,7 @@ export class Game {
   applyRoomState(room) {
     this.room = room;
     this.localId = this.localId || room.viewerId || this.network.id;
+    this.footstepAudio.setMatchActive(room.status !== "waiting");
     this.hud.updateRoom(room, this.localId);
 
     const local = this.getLocalPlayer();
@@ -102,7 +106,7 @@ export class Game {
       activeRemoteIds.add(player.id);
       let remote = this.remotePlayers.get(player.id);
       if (!remote) {
-        remote = new RemotePlayer(this.scene, player.slot);
+        remote = new RemotePlayer(this.scene, player.slot, this.footstepAudio);
         this.remotePlayers.set(player.id, remote);
       }
       remote.update(player);
@@ -118,10 +122,13 @@ export class Game {
 
   showShot(shot) {
     const isLocal = shot.shooterId === this.localId;
-    this.weapon.showTracer(shot.origin, shot.hit?.point, shot.direction, isLocal);
+    this.footstepAudio.playShot(shot.origin, isLocal, this.scene);
+    this.weapon.showTracer(shot.origin, shot.hit?.point ?? shot.coverHit?.point, shot.direction, isLocal);
     if (shot.hit) {
       this.arena.showImpact(shot.hit.point, shot.hit.part);
       this.hud.showHit(shot.hit.part, isLocal);
+    } else if (shot.coverHit) {
+      this.arena.showImpact(shot.coverHit.point, "cover");
     }
   }
 
@@ -141,6 +148,11 @@ export class Game {
       this.player.update(dt);
       this.weapon.update(dt);
       this.network.sendPlayerUpdate(this.player.snapshot());
+      this.localFootsteps.tick(dt, {
+        audible: this.player.audible,
+        dead: false,
+        speed: this.player.currentSpeed
+      });
     }
     for (const remote of this.remotePlayers.values()) remote.tick(dt);
     this.hud.updateTimer(this.room);

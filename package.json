@@ -7,7 +7,9 @@
     "dev": "NODE_ENV=development node server/index.js",
     "build": "vite build",
     "start": "NODE_ENV=production node server/index.js",
-    "lint": "node --check server/index.js && node --check server/gameServer.js && node --check src/main.js"
+    "lint": "node --check server/index.js && node --check server/gameServer.js && node --check server/matchManager.js && node --check shared/config.js && node --check shared/hitboxes.js && node --check src/main.js && node --check src/game/Game.js && node --check src/player/PlayerController.js && node --check src/audio/FootstepAudio.js",
+    "test": "node --test",
+    "qa": "npm run lint && npm test && npm run build"
   },
   "dependencies": {
     "express": "^4.19.2",

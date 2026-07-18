@@ -1,10 +1,11 @@
 import * as THREE from "three";
 
 export class RemotePlayer {
-  constructor(scene, slot) {
+  constructor(scene, slot, footstepAudio) {
     this.group = new THREE.Group();
     this.targetPosition = new THREE.Vector3();
     this.targetYaw = 0;
+    this.footsteps = footstepAudio?.createEmitter(this.group);
 
     const uniform = slot === 0 ? 0x7794a6 : 0xad6d53;
     const limbMaterial = new THREE.MeshStandardMaterial({ color: uniform, roughness: 0.8, metalness: 0.05 });
@@ -36,6 +37,7 @@ export class RemotePlayer {
   tick(dt) {
     this.group.position.lerp(this.targetPosition, 1 - Math.pow(0.02, dt));
     this.group.rotation.y = lerpAngle(this.group.rotation.y, this.targetYaw, 1 - Math.pow(0.02, dt));
+    this.footsteps?.tick(dt, this.player);
   }
 
   dispose(scene) {

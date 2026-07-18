@@ -1,11 +1,16 @@
-import { GAME_CONFIG, clampToArena } from "../shared/config.js";
+import { GAME_CONFIG, clampToArena, isMovementBlocked, isPositionBlocked } from "../shared/config.js";
 import { intersectPlayerHitboxes } from "../shared/hitboxes.js";
 
 const ROOM_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 export class MatchManager {
-  constructor(io) {
+  constructor(io, {
+    roundTransitionMs = GAME_CONFIG.roundTransitionMs,
+    reloadMs = GAME_CONFIG.pistol.reloadMs
+  } = {}) {
     this.io = io;
+    this.roundTransitionMs = roundTransitionMs;
+    this.reloadMs = reloadMs;
     this.rooms = new Map();
     this.socketToRoom = new Map();
     this.waitingRoomCode = null;
@@ -51,7 +56,7 @@ export class MatchManager {
 
   setReady(socket, ready) {
     const room = this.getRoomForSocket(socket);
-    if (!room) return;
+    if (!room || room.status !== "waiting") return;
     const player = room.players.get(socket.id);
     if (!player) return;
     player.ready = Boolean(ready);
@@ -74,7 +79,10 @@ export class MatchManager {
     const maxStep = GAME_CONFIG.player.walkSpeed * 1.65 * delta + 0.35;
     const attemptedStep = distance2d(player.position, position);
 
-    if (attemptedStep <= maxStep) {
+    const acceptedMove = attemptedStep <= maxStep
+      && !isPositionBlocked(position)
+      && !isMovementBlocked(player.position, position);
+    if (acceptedMove) {
       player.position = position;
     }
 
@@ -82,6 +90,9 @@ export class MatchManager {
     player.yaw = sanitizeNumber(payload?.yaw, player.yaw, -Math.PI * 2, Math.PI * 2);
     player.pitch = sanitizeNumber(payload?.pitch, player.pitch, -1.35, 1.35);
     player.crouch = Boolean(payload?.crouch);
+    player.slowWalk = Boolean(payload?.slowWalk) && !player.crouch;
+    player.speed = acceptedMove ? attemptedStep / delta : 0;
+    player.audible = !player.slowWalk && !player.crouch && player.speed > 0.35;
     player.seq = Number.isFinite(payload?.seq) ? payload.seq : player.seq;
   }
 
@@ -106,10 +117,10 @@ export class MatchManager {
     const direction = directionFromAngles(shooter.yaw, shooter.pitch);
     const target = [...room.players.values()].find((player) => player.id !== shooter.id && !player.dead);
     let hit = null;
+    const coverDistance = nearestEnvironmentDistance(origin, direction);
 
     if (target) {
       hit = intersectPlayerHitboxes(origin, direction, target);
-      const coverDistance = hit ? nearestCoverDistance(origin, direction) : null;
       if (hit && (coverDistance === null || coverDistance > hit.distance)) {
         const damage = room.suddenDeath ? target.hp : GAME_CONFIG.damage[hit.part];
         target.hp = Math.max(0, target.hp - damage);
@@ -123,12 +134,17 @@ export class MatchManager {
       }
     }
 
+    const coverHit = !hit && coverDistance !== null
+      ? { point: pointAlongRay(origin, direction, coverDistance) }
+      : null;
+
     const shot = {
       shooterId: shooter.id,
       origin,
       direction,
       ammo: shooter.ammo,
       hit: hit ? { targetId: target.id, part: hit.part, name: hit.name, point: hit.point, hp: target.hp } : null,
+      coverHit,
       shotId: payload?.shotId ?? now
     };
     this.io.to(room.code).emit("weapon:shot", shot);
@@ -142,8 +158,9 @@ export class MatchManager {
     const player = room.players.get(socket.id);
     if (!player || player.dead || player.ammo === GAME_CONFIG.pistol.magazineSize) return;
     const now = Date.now();
-    player.reloadUntil = now + GAME_CONFIG.pistol.reloadMs;
-    this.io.to(socket.id).emit("weapon:reload-start", { reloadMs: GAME_CONFIG.pistol.reloadMs });
+    if (player.reloadUntil > now) return;
+    player.reloadUntil = now + this.reloadMs;
+    this.io.to(socket.id).emit("weapon:reload-start", { reloadMs: this.reloadMs });
     setTimeout(() => {
       const activeRoom = this.rooms.get(room.code);
       const activePlayer = activeRoom?.players.get(socket.id);
@@ -151,7 +168,7 @@ export class MatchManager {
       activePlayer.ammo = GAME_CONFIG.pistol.magazineSize;
       activePlayer.reloadUntil = 0;
       this.broadcastRoom(activeRoom);
-    }, GAME_CONFIG.pistol.reloadMs);
+    }, this.reloadMs);
   }
 
   tick() {
@@ -195,7 +212,11 @@ export class MatchManager {
   }
 
   startNextRound(room) {
-    room.round += 1;
+    this.startRound(room, true);
+  }
+
+  startRound(room, incrementRound) {
+    if (incrementRound) room.round += 1;
     room.status = "playing";
     room.roundStartedAt = Date.now();
     room.roundEndsAt = room.roundStartedAt + GAME_CONFIG.roundSeconds * 1000;
@@ -226,7 +247,7 @@ export class MatchManager {
       const activeRoom = this.rooms.get(room.code);
       if (!activeRoom || activeRoom.status !== "roundEnd") return;
       this.startNextRound(activeRoom);
-    }, 3500);
+    }, this.roundTransitionMs);
   }
 
   finishMatch(room, winnerSlot, reason) {
@@ -238,16 +259,21 @@ export class MatchManager {
   }
 
   resolveTimer(room) {
-    const players = [...room.players.values()];
-    if (players.length < 2) return;
-    const [a, b] = players;
-    if (a.hp > b.hp) this.finishRound(room, a.slot, "Won on higher HP");
-    else if (b.hp > a.hp) this.finishRound(room, b.slot, "Won on higher HP");
-    else {
-      room.suddenDeath = true;
-      room.roundEndsAt = Date.now() + 30000;
-      this.io.to(room.code).emit("round:sudden-death", { message: "Equal HP. Next hit wins." });
-    }
+    if (room.status !== "playing" || room.players.size < 2) return;
+    room.status = "roundEnd";
+    room.lastRoundResult = {
+      winnerSlot: null,
+      reason: "Time expired - round restarting",
+      wins: [...room.wins]
+    };
+    this.io.to(room.code).emit("round:end", room.lastRoundResult);
+    this.broadcastRoom(room);
+
+    setTimeout(() => {
+      const activeRoom = this.rooms.get(room.code);
+      if (!activeRoom || activeRoom.status !== "roundEnd") return;
+      this.startRound(activeRoom, false);
+    }, this.roundTransitionMs);
   }
 
   addPlayer(room, socket) {
@@ -265,6 +291,9 @@ export class MatchManager {
       yaw: GAME_CONFIG.spawns[slot].yaw,
       pitch: 0,
       crouch: false,
+      slowWalk: false,
+      audible: false,
+      speed: 0,
       dead: false,
       seq: 0
     };
@@ -285,6 +314,9 @@ export class MatchManager {
     player.yaw = spawn.yaw;
     player.pitch = 0;
     player.crouch = false;
+    player.slowWalk = false;
+    player.audible = false;
+    player.speed = 0;
     player.dead = false;
     player.lastPositionAt = Date.now();
   }
@@ -311,6 +343,9 @@ export class MatchManager {
         yaw: player.yaw,
         pitch: player.pitch,
         crouch: player.crouch,
+        slowWalk: player.slowWalk,
+        audible: player.audible,
+        speed: player.speed,
         dead: player.dead,
         seq: player.seq
       }))
@@ -365,20 +400,39 @@ function distance2d(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
-function nearestCoverDistance(origin, direction) {
+function nearestEnvironmentDistance(origin, direction) {
   let nearest = null;
-  for (const item of GAME_CONFIG.cover) {
-    const hit = rayAabb(origin, direction, {
+  const bounds = GAME_CONFIG.cover.map((item) => ({
       minX: item.x - item.w / 2,
       maxX: item.x + item.w / 2,
       minY: 0,
       maxY: item.h,
       minZ: item.z - item.d / 2,
       maxZ: item.z + item.d / 2
-    });
+  }));
+  const halfW = GAME_CONFIG.arena.width / 2;
+  const halfD = GAME_CONFIG.arena.depth / 2;
+  const thickness = 0.35;
+  bounds.push(
+    { minX: -halfW - thickness / 2, maxX: -halfW + thickness / 2, minY: 0, maxY: GAME_CONFIG.arena.wallHeight, minZ: -halfD, maxZ: halfD },
+    { minX: halfW - thickness / 2, maxX: halfW + thickness / 2, minY: 0, maxY: GAME_CONFIG.arena.wallHeight, minZ: -halfD, maxZ: halfD },
+    { minX: -halfW, maxX: halfW, minY: 0, maxY: GAME_CONFIG.arena.wallHeight, minZ: -halfD - thickness / 2, maxZ: -halfD + thickness / 2 },
+    { minX: -halfW, maxX: halfW, minY: 0, maxY: GAME_CONFIG.arena.wallHeight, minZ: halfD - thickness / 2, maxZ: halfD + thickness / 2 }
+  );
+
+  for (const itemBounds of bounds) {
+    const hit = rayAabb(origin, direction, itemBounds);
     if (hit !== null && (nearest === null || hit < nearest)) nearest = hit;
   }
   return nearest;
+}
+
+function pointAlongRay(origin, direction, distance) {
+  return {
+    x: origin.x + direction.x * distance,
+    y: origin.y + direction.y * distance,
+    z: origin.z + direction.z * distance
+  };
 }
 
 function rayAabb(origin, direction, bounds) {

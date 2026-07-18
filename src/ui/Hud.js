@@ -67,7 +67,7 @@ export class Hud {
 
   updateTimer(room) {
     if (!room || room.status !== "playing") {
-      this.timer.textContent = "2:00";
+      this.timer.textContent = "1:00";
       return;
     }
     const remaining = Math.max(0, room.roundEndsAt - Date.now());
@@ -111,7 +111,7 @@ function template() {
     <div class="hud">
       <div class="topbar">
         <div class="score" data-score>0 - 0</div>
-        <div class="timer" data-timer>2:00</div>
+        <div class="timer" data-timer>1:00</div>
         <div class="room-pill" data-room-code>No room</div>
       </div>
       <div class="health">
@@ -136,6 +136,7 @@ function template() {
         </div>
         <button class="ready" data-ready>Set Ready</button>
         <p data-status>Choose a room</p>
+        <div class="controls-note">WASD move · Shift silent walk · Hold C crouch · R reload</div>
       </div>
     </section>
     <section class="winner">

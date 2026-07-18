@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { GAME_CONFIG, obstacleBounds } from "../../shared/config.js";
+import { GAME_CONFIG, expandedObstacleBounds } from "../../shared/config.js";
 
 const FORWARD = new THREE.Vector3();
 const RIGHT = new THREE.Vector3();
@@ -14,10 +14,14 @@ export class PlayerController {
     this.yaw = 0;
     this.pitch = 0;
     this.crouch = false;
+    this.slowWalk = false;
+    this.audible = false;
     this.onGround = true;
     this.keys = new Set();
     this.serverSlot = 0;
     this.hasSpawned = false;
+    this.currentSpeed = 0;
+    this.eyeHeight = GAME_CONFIG.player.eyeHeight;
 
     this.camera.rotation.order = "YXZ";
     this.bindInput();
@@ -38,7 +42,13 @@ export class PlayerController {
   }
 
   lockPointer() {
-    if (document.pointerLockElement !== this.domElement) this.domElement.requestPointerLock();
+    if (document.pointerLockElement === this.domElement) return;
+    try {
+      const pending = this.domElement.requestPointerLock();
+      pending?.catch?.(() => {});
+    } catch {
+      // Pointer lock can be denied by browser policy without blocking gameplay input.
+    }
   }
 
   setServerState(state, force = false) {
@@ -52,8 +62,13 @@ export class PlayerController {
   }
 
   update(dt) {
-    this.crouch = this.keys.has("ControlLeft") || this.keys.has("ControlRight") || this.keys.has("KeyC");
-    const speed = this.crouch ? GAME_CONFIG.player.crouchSpeed : GAME_CONFIG.player.walkSpeed;
+    this.crouch = this.keys.has("KeyC");
+    this.slowWalk = (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight")) && !this.crouch;
+    const speed = this.crouch
+      ? GAME_CONFIG.player.crouchSpeed
+      : this.slowWalk
+        ? GAME_CONFIG.player.silentWalkSpeed
+        : GAME_CONFIG.player.walkSpeed;
     FORWARD.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     RIGHT.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
@@ -63,6 +78,8 @@ export class PlayerController {
     if (this.keys.has("KeyD")) move.add(RIGHT);
     if (this.keys.has("KeyA")) move.sub(RIGHT);
     if (move.lengthSq() > 0) move.normalize().multiplyScalar(speed);
+    const isMoving = move.lengthSq() > 0.01;
+    this.currentSpeed = isMoving ? speed : 0;
 
     this.velocity.x = move.x;
     this.velocity.z = move.z;
@@ -72,10 +89,9 @@ export class PlayerController {
     }
 
     this.velocity.y -= GAME_CONFIG.player.gravity * dt;
-    this.position.x += this.velocity.x * dt;
-    this.resolveAxis("x");
-    this.position.z += this.velocity.z * dt;
-    this.resolveAxis("z");
+    this.depenetrate();
+    this.moveAxis("x", this.velocity.x * dt);
+    this.moveAxis("z", this.velocity.z * dt);
     this.position.y += this.velocity.y * dt;
 
     if (this.position.y <= 0) {
@@ -84,36 +100,59 @@ export class PlayerController {
       this.onGround = true;
     }
 
-    const eye = this.crouch ? GAME_CONFIG.player.crouchEyeHeight : GAME_CONFIG.player.eyeHeight;
-    this.camera.position.set(this.position.x, this.position.y + eye, this.position.z);
+    this.audible = isMoving && this.onGround && !this.slowWalk && !this.crouch;
+    const targetEye = this.crouch ? GAME_CONFIG.player.crouchEyeHeight : GAME_CONFIG.player.eyeHeight;
+    this.eyeHeight = THREE.MathUtils.damp(this.eyeHeight, targetEye, 18, dt);
+    this.camera.position.set(this.position.x, this.position.y + this.eyeHeight, this.position.z);
     this.camera.rotation.y = this.yaw;
     this.camera.rotation.x = this.pitch;
   }
 
-  resolveAxis(axis) {
+  moveAxis(axis, amount) {
+    if (Math.abs(amount) < 0.000001) return;
     const halfW = GAME_CONFIG.arena.width / 2 - GAME_CONFIG.player.radius;
     const halfD = GAME_CONFIG.arena.depth / 2 - GAME_CONFIG.player.radius;
-    this.position.x = Math.max(-halfW, Math.min(halfW, this.position.x));
-    this.position.z = Math.max(-halfD, Math.min(halfD, this.position.z));
+    const otherAxis = axis === "x" ? "z" : "x";
+    const minKey = axis === "x" ? "minX" : "minZ";
+    const maxKey = axis === "x" ? "maxX" : "maxZ";
+    const otherMinKey = axis === "x" ? "minZ" : "minX";
+    const otherMaxKey = axis === "x" ? "maxZ" : "maxX";
+    const start = this.position[axis];
+    let target = start + amount;
 
     for (const item of this.colliders) {
-      const bounds = obstacleBounds(item);
-      if (this.position.y > bounds.maxY) continue;
-      const closestX = Math.max(bounds.minX, Math.min(bounds.maxX, this.position.x));
-      const closestZ = Math.max(bounds.minZ, Math.min(bounds.maxZ, this.position.z));
-      const dx = this.position.x - closestX;
-      const dz = this.position.z - closestZ;
-      if (dx * dx + dz * dz >= GAME_CONFIG.player.radius ** 2) continue;
+      if (this.position.y >= item.h - 0.02) continue;
+      const bounds = expandedObstacleBounds(item);
+      const other = this.position[otherAxis];
+      if (other <= bounds[otherMinKey] || other >= bounds[otherMaxKey]) continue;
 
-      if (axis === "x") {
-        this.position.x = this.velocity.x > 0
-          ? bounds.minX - GAME_CONFIG.player.radius
-          : bounds.maxX + GAME_CONFIG.player.radius;
-      } else {
-        this.position.z = this.velocity.z > 0
-          ? bounds.minZ - GAME_CONFIG.player.radius
-          : bounds.maxZ + GAME_CONFIG.player.radius;
+      if (amount > 0 && start <= bounds[minKey] && target > bounds[minKey]) {
+        target = Math.min(target, bounds[minKey]);
+      } else if (amount < 0 && start >= bounds[maxKey] && target < bounds[maxKey]) {
+        target = Math.max(target, bounds[maxKey]);
       }
+    }
+
+    this.position[axis] = target;
+    this.position.x = Math.max(-halfW, Math.min(halfW, this.position.x));
+    this.position.z = Math.max(-halfD, Math.min(halfD, this.position.z));
+  }
+
+  depenetrate() {
+    for (const item of this.colliders) {
+      if (this.position.y >= item.h - 0.02) continue;
+      const bounds = expandedObstacleBounds(item);
+      if (this.position.x <= bounds.minX || this.position.x >= bounds.maxX
+        || this.position.z <= bounds.minZ || this.position.z >= bounds.maxZ) continue;
+
+      const exits = [
+        { axis: "x", value: bounds.minX, distance: this.position.x - bounds.minX },
+        { axis: "x", value: bounds.maxX, distance: bounds.maxX - this.position.x },
+        { axis: "z", value: bounds.minZ, distance: this.position.z - bounds.minZ },
+        { axis: "z", value: bounds.maxZ, distance: bounds.maxZ - this.position.z }
+      ];
+      exits.sort((a, b) => a.distance - b.distance);
+      this.position[exits[0].axis] = exits[0].value;
     }
   }
 
@@ -122,7 +161,9 @@ export class PlayerController {
       position: { x: this.position.x, y: this.position.y, z: this.position.z },
       yaw: this.yaw,
       pitch: this.pitch,
-      crouch: this.crouch
+      crouch: this.crouch,
+      slowWalk: this.slowWalk,
+      audible: this.audible
     };
   }
 }

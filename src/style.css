@@ -284,6 +284,13 @@ h2 {
   color: #d6c4aa;
 }
 
+.controls-note {
+  margin-top: 12px;
+  color: #9f927d;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 @media (max-width: 620px) {
   .topbar {
     top: 10px;

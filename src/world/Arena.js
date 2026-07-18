@@ -19,7 +19,13 @@ export function createArena(scene) {
   return {
     colliders: GAME_CONFIG.cover,
     showImpact(point, part) {
-      const color = part === "head" ? 0xff3b30 : part === "torso" ? 0xffb703 : 0x9bdcff;
+      const color = part === "head"
+        ? 0xff3b30
+        : part === "torso"
+          ? 0xffb703
+          : part === "cover"
+            ? 0xffd6a3
+            : 0x9bdcff;
       const impact = new THREE.Mesh(
         new THREE.SphereGeometry(0.055, 10, 10),
         new THREE.MeshBasicMaterial({ color })
@@ -43,9 +49,11 @@ function addLights(scene) {
   scene.add(ambient);
 
   const spots = [
-    [-6, 5.4, -5],
-    [6, 5.4, 5],
-    [0, 5.1, 0]
+    [-11, 5.4, -7],
+    [11, 5.4, 7],
+    [0, 5.1, 0],
+    [-4, 5.0, 9],
+    [4, 5.0, -9]
   ];
   for (const [x, y, z] of spots) {
     const light = new THREE.PointLight(0xffe1b0, 38, 16, 1.8);
@@ -87,7 +95,7 @@ function addWalls(scene, textures) {
 function addCover(scene, item, textures) {
   const material = item.type === "crate"
     ? new THREE.MeshStandardMaterial({ map: textures.crate, roughness: 0.8, metalness: 0.2 })
-    : item.type === "pillar"
+    : item.type === "pillar" || item.type === "concrete"
       ? new THREE.MeshStandardMaterial({ map: textures.concrete, roughness: 0.94 })
       : new THREE.MeshStandardMaterial({ map: textures.rust, roughness: 0.82, metalness: 0.28 });
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(item.w, item.h, item.d), material);

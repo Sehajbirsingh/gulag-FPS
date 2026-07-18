@@ -2,6 +2,16 @@
 
 Browser-based 1v1 FPS duel inspired by the Warzone Gulag format.
 
+## Screenshots
+
+### Lobby and Matchmaking
+
+![Gulag Duel lobby with room creation and matchmaking controls](./smoke-render.png)
+
+### Protected Round Spawn
+
+![First-person view from inside the protected spawn cabin](./smoke-match.png)
+
 ## Stack
 
 - Three.js/WebGL client
@@ -14,8 +24,8 @@ Browser-based 1v1 FPS duel inspired by the Warzone Gulag format.
 
 - Best of 5 rounds; first player to 3 round wins takes the match.
 - Exactly 2 players per room.
-- Each round lasts 2 minutes.
-- If the timer expires, higher remaining HP wins the round. If HP is tied, sudden death starts and the next successful hit wins.
+- Each round lasts 1 minute.
+- If the timer expires, the same round restarts with health, ammo, and positions reset. No point is awarded.
 - Pistol only: 8 rounds per magazine, 420 ms fire cooldown, 1.6 s reload.
 - Health resets to 100 HP each round.
 - Head hitbox: instant kill.
@@ -38,7 +48,18 @@ Controls:
 - Left mouse to fire
 - R to reload
 - Space to jump
-- Ctrl or C to crouch
+- Shift to silent walk
+- Hold C to crouch
+
+Audio begins after the first click or key press because browsers block autoplay until the player interacts with the page. Lobby music stops as soon as the match starts.
+
+## Quality Checks
+
+```bash
+npm run qa
+```
+
+This runs syntax checks, server/collision tests, and a production build.
 
 ## Docker
 

@@ -2,11 +2,14 @@ import { Server } from "socket.io";
 import { GAME_CONFIG } from "../shared/config.js";
 import { MatchManager } from "./matchManager.js";
 
-export function attachGameServer(httpServer) {
+export function attachGameServer(httpServer, {
+  tickRateMs = GAME_CONFIG.tickRateMs,
+  matchOptions = {}
+} = {}) {
   const io = new Server(httpServer, {
     cors: { origin: true }
   });
-  const manager = new MatchManager(io);
+  const manager = new MatchManager(io, matchOptions);
 
   io.on("connection", (socket) => {
     socket.emit("server:config", GAME_CONFIG);
@@ -21,8 +24,15 @@ export function attachGameServer(httpServer) {
     socket.on("disconnect", () => manager.disconnect(socket));
   });
 
-  setInterval(() => manager.tick(), GAME_CONFIG.tickRateMs);
-  return io;
+  const tickTimer = setInterval(() => manager.tick(), tickRateMs);
+  return {
+    io,
+    manager,
+    close() {
+      clearInterval(tickTimer);
+      return new Promise((resolve) => io.close(resolve));
+    }
+  };
 }
 
 function withAck(socket, handler) {
